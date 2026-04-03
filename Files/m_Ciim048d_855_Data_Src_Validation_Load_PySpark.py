@@ -4,172 +4,386 @@
 # Description: Informatica to Fabric Conversion
 # ============================================
 
-# -- Input Type: Informatica PowerCenter Mapping XML
-# -- Target Platform: Microsoft Fabric (PySpark)
-# -- Conversion Approach: Direct transformation mapping from Informatica to PySpark DataFrame API
-# -- Major Risks / Checks:
-#    - Verify source table schema matches expected columns
-#    - Validate date format conversions (DD-MON-YY to standard format)
-#    - Ensure UPDATE vs INSERT logic is correctly implemented
-#    - Check NULL handling in expressions
-#    - Validate target table exists and has correct schema
+# ============================================
+# CONVERSION LOG
+# ============================================
+# Input Type: Informatica PowerCenter Mapping XML
+# Target Platform: Microsoft Fabric (PySpark)
+# Conversion Approach: Direct transformation mapping from Informatica to PySpark DataFrame API
+# Major Risks / Checks:
+#   - Verify Oracle source connectivity and credentials
+#   - Validate date format conversions (DD-MON-YYYY to standard format)
+#   - Ensure filter conditions are correctly applied
+#   - Check target table schema compatibility
+#   - Verify NULL handling and data type conversions
+#   - Monitor performance for large datasets
+# ============================================
 
+# Import required libraries
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, when, lit, current_timestamp, to_date, 
-    upper, trim, coalesce, concat_ws, expr
+    col, when, trim, upper, to_date, current_timestamp,
+    lit, coalesce, length, substring, concat
 )
-from delta.tables import DeltaTable
+from pyspark.sql.types import StringType, DateType, TimestampType
+from datetime import datetime
 import logging
 
-# Initialize Spark Session
-spark = SparkSession.builder \
-    .appName("m_Ciim048d_855_Data_Src_Validation_Load") \
-    .getOrCreate()
-
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# ============================================
+# SPARK SESSION INITIALIZATION
+# ============================================
 try:
-    # ============================================
-    # PARAMETERS
-    # ============================================
-    source_table = "DATA_SRC_VALIDATION"
-    target_table = "DATA_SRC_VALIDATION_LOAD"
+    spark = SparkSession.builder \
+        .appName("m_Ciim048d_855_Data_Src_Validation_Load") \
+        .config("spark.sql.adaptive.enabled", "true") \
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+        .getOrCreate()
     
-    logger.info(f"Starting mapping: m_Ciim048d_855_Data_Src_Validation_Load")
-    logger.info(f"Source: {source_table}")
-    logger.info(f"Target: {target_table}")
+    logger.info("Spark session created successfully")
+except Exception as e:
+    logger.error(f"Failed to create Spark session: {str(e)}")
+    raise
+
+# ============================================
+# PARAMETERS
+# ============================================
+# Source parameters
+SOURCE_DATABASE = "ORCL"  # Oracle database name
+SOURCE_SCHEMA = "your_schema"  # Replace with actual schema
+SOURCE_TABLE = "CIIM048D_855_DATA_SRC_VALIDATION"
+
+# Target parameters
+TARGET_LAKEHOUSE = "your_lakehouse"  # Replace with actual lakehouse name
+TARGET_SCHEMA = "dbo"  # Default schema for Fabric
+TARGET_TABLE = "CIIM048D_855_DATA_SRC_VALIDATION"
+
+# JDBC connection parameters for Oracle source
+JDBC_URL = f"jdbc:oracle:thin:@your_host:1521:{SOURCE_DATABASE}"  # Replace with actual connection details
+JDBC_USER = "your_username"  # Replace with actual username
+JDBC_PASSWORD = "your_password"  # Replace with actual password or use Key Vault
+
+# ============================================
+# SOURCE: SQ_CIIM048D_855_DATA_SRC_VALIDATION
+# ============================================
+try:
+    logger.info(f"Reading source table: {SOURCE_SCHEMA}.{SOURCE_TABLE}")
     
-    # ============================================
-    # SOURCE READ
-    # ============================================
-    df_source = spark.table(source_table)
+    # Read from Oracle source
+    df_source = spark.read \
+        .format("jdbc") \
+        .option("url", JDBC_URL) \
+        .option("dbtable", f"{SOURCE_SCHEMA}.{SOURCE_TABLE}") \
+        .option("user", JDBC_USER) \
+        .option("password", JDBC_PASSWORD) \
+        .option("driver", "oracle.jdbc.driver.OracleDriver") \
+        .option("fetchsize", "10000") \
+        .load()
     
-    logger.info(f"Source records read: {df_source.count()}")
-    
-    # ============================================
-    # TRANSFORMATION: Expression (EXP_DATA_SRC_VALIDATION_LOAD)
-    # ============================================
-    df_transformed = df_source.select(
-        col("DATA_SRC_VALIDATION_ID"),
-        col("DATA_SRC_ID"),
-        col("VALIDATION_TYPE_CD"),
-        col("VALIDATION_QUERY_TXT"),
-        col("VALIDATION_RESULT_CNT"),
-        col("VALIDATION_THRESHOLD_CNT"),
-        col("VALIDATION_STATUS_CD"),
-        col("VALIDATION_DT"),
-        col("VALIDATION_COMMENTS_TXT"),
-        col("CREATE_USER_ID"),
-        col("CREATE_TS"),
-        col("UPDATE_USER_ID"),
-        col("UPDATE_TS"),
-        col("ACTV_IND"),
-        col("VALIDATION_NAME_TXT"),
-        col("VALIDATION_DESCRIPTION_TXT"),
-        col("VALIDATION_FREQUENCY_CD"),
-        col("NOTIFICATION_EMAIL_TXT"),
-        col("LAST_VALIDATION_DT"),
-        col("NEXT_VALIDATION_DT"),
-        col("VALIDATION_PRIORITY_CD"),
-        col("VALIDATION_OWNER_TXT"),
-        col("VALIDATION_CATEGORY_CD"),
-        col("VALIDATION_SUBCATEGORY_CD"),
-        col("VALIDATION_SEVERITY_CD"),
-        col("VALIDATION_IMPACT_CD"),
-        col("VALIDATION_RESOLUTION_TXT"),
-        col("VALIDATION_NOTES_TXT"),
-        col("VALIDATION_TAGS_TXT"),
-        col("VALIDATION_METADATA_TXT"),
-        col("VALIDATION_EXECUTION_TIME_SEC"),
-        col("VALIDATION_ERROR_MSG_TXT"),
-        col("VALIDATION_WARNING_MSG_TXT"),
-        col("VALIDATION_INFO_MSG_TXT"),
-        col("VALIDATION_DEBUG_MSG_TXT"),
-        col("VALIDATION_TRACE_MSG_TXT"),
-        col("VALIDATION_AUDIT_ID"),
-        col("VALIDATION_RUN_ID"),
-        col("VALIDATION_BATCH_ID"),
-        col("VALIDATION_JOB_ID"),
-        col("VALIDATION_STEP_ID"),
-        col("VALIDATION_TASK_ID"),
-        col("VALIDATION_SUBTASK_ID"),
-        col("VALIDATION_SEQUENCE_NBR"),
-        col("VALIDATION_RETRY_CNT"),
-        col("VALIDATION_MAX_RETRY_CNT"),
-        col("VALIDATION_TIMEOUT_SEC"),
-        col("VALIDATION_START_TS"),
-        col("VALIDATION_END_TS"),
-        col("VALIDATION_DURATION_SEC"),
-        col("VALIDATION_CPU_TIME_SEC"),
-        col("VALIDATION_MEMORY_MB"),
-        col("VALIDATION_DISK_IO_MB"),
-        col("VALIDATION_NETWORK_IO_MB"),
-        col("VALIDATION_ROW_CNT"),
-        col("VALIDATION_COLUMN_CNT"),
-        col("VALIDATION_FILE_SIZE_MB"),
-        col("VALIDATION_PARTITION_CNT"),
-        col("VALIDATION_INDEX_CNT"),
-        col("VALIDATION_CONSTRAINT_CNT"),
-        col("VALIDATION_TRIGGER_CNT")
-    )
-    
-    # Add system timestamp for tracking
-    df_transformed = df_transformed.withColumn(
-        "ETL_LOAD_TS", 
-        current_timestamp()
-    )
-    
-    # ============================================
-    # TRANSFORMATION: Router (RTR_DATA_SRC_VALIDATION_LOAD)
-    # ============================================
-    # Group 1: INSERT - New records (UPDATE_TS is NULL)
-    df_insert = df_transformed.filter(col("UPDATE_TS").isNull())
-    
-    # Group 2: UPDATE - Existing records (UPDATE_TS is NOT NULL)
-    df_update = df_transformed.filter(col("UPDATE_TS").isNotNull())
-    
-    logger.info(f"Records for INSERT: {df_insert.count()}")
-    logger.info(f"Records for UPDATE: {df_update.count()}")
-    
-    # ============================================
-    # TARGET WRITE
-    # ============================================
-    
-    # Check if target table exists
-    if spark.catalog.tableExists(target_table):
-        # Use Delta MERGE for UPSERT operation
-        delta_table = DeltaTable.forName(spark, target_table)
-        
-        # Combine INSERT and UPDATE dataframes
-        df_final = df_insert.unionByName(df_update)
-        
-        # Perform MERGE operation
-        delta_table.alias("target").merge(
-            df_final.alias("source"),
-            "target.DATA_SRC_VALIDATION_ID = source.DATA_SRC_VALIDATION_ID"
-        ).whenMatchedUpdateAll(
-        ).whenNotMatchedInsertAll(
-        ).execute()
-        
-        logger.info(f"MERGE operation completed successfully")
-    else:
-        # If table doesn't exist, create it with all records
-        df_final = df_insert.unionByName(df_update)
-        df_final.write.format("delta").mode("overwrite").saveAsTable(target_table)
-        logger.info(f"Target table created and loaded successfully")
-    
-    # ============================================
-    # LOGGING
-    # ============================================
-    final_count = spark.table(target_table).count()
-    logger.info(f"Target table final record count: {final_count}")
-    logger.info("Mapping execution completed successfully")
+    source_count = df_source.count()
+    logger.info(f"Source records read: {source_count}")
     
 except Exception as e:
-    logger.error(f"Error in mapping execution: {str(e)}")
+    logger.error(f"Error reading source table: {str(e)}")
     raise
-finally:
-    spark.stop()
+
+# ============================================
+# TRANSFORMATION: EXP_CIIM048D_855_DATA_SRC_VALIDATION
+# ============================================
+try:
+    logger.info("Applying expression transformations")
+    
+    df_transformed = df_source.select(
+        # CTRL_ID - Pass through
+        col("CTRL_ID"),
+        
+        # DATA_SRC_ID - Pass through
+        col("DATA_SRC_ID"),
+        
+        # DATA_SRC_NM - Pass through
+        col("DATA_SRC_NM"),
+        
+        # DATA_SRC_DESC - Pass through
+        col("DATA_SRC_DESC"),
+        
+        # DATA_SRC_CTGRY_ID - Pass through
+        col("DATA_SRC_CTGRY_ID"),
+        
+        # DATA_SRC_TYPE_ID - Pass through
+        col("DATA_SRC_TYPE_ID"),
+        
+        # DATA_SRC_SUBTYPE_ID - Pass through
+        col("DATA_SRC_SUBTYPE_ID"),
+        
+        # DATA_SRC_PRDCT_ID - Pass through
+        col("DATA_SRC_PRDCT_ID"),
+        
+        # DATA_SRC_VRSN_ID - Pass through
+        col("DATA_SRC_VRSN_ID"),
+        
+        # DATA_SRC_STTS_ID - Pass through
+        col("DATA_SRC_STTS_ID"),
+        
+        # EFCTV_STRT_DT - Date conversion from DD-MON-YYYY to standard date format
+        when(
+            col("EFCTV_STRT_DT").isNotNull(),
+            to_date(col("EFCTV_STRT_DT"), "dd-MMM-yyyy")
+        ).otherwise(None).alias("EFCTV_STRT_DT"),
+        
+        # EFCTV_END_DT - Date conversion from DD-MON-YYYY to standard date format
+        when(
+            col("EFCTV_END_DT").isNotNull(),
+            to_date(col("EFCTV_END_DT"), "dd-MMM-yyyy")
+        ).otherwise(None).alias("EFCTV_END_DT"),
+        
+        # REC_CREAT_TS - Pass through
+        col("REC_CREAT_TS"),
+        
+        # REC_CREAT_USER_ID - Pass through
+        col("REC_CREAT_USER_ID"),
+        
+        # LST_UPDT_TS - Pass through
+        col("LST_UPDT_TS"),
+        
+        # LST_UPDT_USER_ID - Pass through
+        col("LST_UPDT_USER_ID"),
+        
+        # DATA_SRC_OWNR_ID - Pass through
+        col("DATA_SRC_OWNR_ID"),
+        
+        # DATA_SRC_CNTCT_ID - Pass through
+        col("DATA_SRC_CNTCT_ID"),
+        
+        # DATA_SRC_LOC_ID - Pass through
+        col("DATA_SRC_LOC_ID"),
+        
+        # DATA_SRC_URL - Pass through
+        col("DATA_SRC_URL"),
+        
+        # DATA_SRC_PATH - Pass through
+        col("DATA_SRC_PATH"),
+        
+        # DATA_SRC_FILE_NM - Pass through
+        col("DATA_SRC_FILE_NM"),
+        
+        # DATA_SRC_SCHMA_NM - Pass through
+        col("DATA_SRC_SCHMA_NM"),
+        
+        # DATA_SRC_TBL_NM - Pass through
+        col("DATA_SRC_TBL_NM"),
+        
+        # DATA_SRC_VIEW_NM - Pass through
+        col("DATA_SRC_VIEW_NM"),
+        
+        # DATA_SRC_PROC_NM - Pass through
+        col("DATA_SRC_PROC_NM"),
+        
+        # DATA_SRC_FUNC_NM - Pass through
+        col("DATA_SRC_FUNC_NM"),
+        
+        # DATA_SRC_PKG_NM - Pass through
+        col("DATA_SRC_PKG_NM"),
+        
+        # DATA_SRC_QUERY_TXT - Pass through
+        col("DATA_SRC_QUERY_TXT"),
+        
+        # DATA_SRC_FILTR_TXT - Pass through
+        col("DATA_SRC_FILTR_TXT"),
+        
+        # DATA_SRC_SORT_TXT - Pass through
+        col("DATA_SRC_SORT_TXT"),
+        
+        # DATA_SRC_JOIN_TXT - Pass through
+        col("DATA_SRC_JOIN_TXT"),
+        
+        # DATA_SRC_AGGT_TXT - Pass through
+        col("DATA_SRC_AGGT_TXT"),
+        
+        # DATA_SRC_PRTN_TXT - Pass through
+        col("DATA_SRC_PRTN_TXT"),
+        
+        # DATA_SRC_IDX_TXT - Pass through
+        col("DATA_SRC_IDX_TXT"),
+        
+        # DATA_SRC_CNSTRNT_TXT - Pass through
+        col("DATA_SRC_CNSTRNT_TXT"),
+        
+        # DATA_SRC_TRGR_TXT - Pass through
+        col("DATA_SRC_TRGR_TXT"),
+        
+        # DATA_SRC_RLTNSHP_TXT - Pass through
+        col("DATA_SRC_RLTNSHP_TXT"),
+        
+        # DATA_SRC_DPNDNCY_TXT - Pass through
+        col("DATA_SRC_DPNDNCY_TXT"),
+        
+        # DATA_SRC_LNKGE_TXT - Pass through
+        col("DATA_SRC_LNKGE_TXT"),
+        
+        # DATA_SRC_RFRNC_TXT - Pass through
+        col("DATA_SRC_RFRNC_TXT"),
+        
+        # DATA_SRC_ANNTN_TXT - Pass through
+        col("DATA_SRC_ANNTN_TXT"),
+        
+        # DATA_SRC_CMNT_TXT - Pass through
+        col("DATA_SRC_CMNT_TXT"),
+        
+        # DATA_SRC_TAG_TXT - Pass through
+        col("DATA_SRC_TAG_TXT"),
+        
+        # DATA_SRC_LNKG_ID - Pass through
+        col("DATA_SRC_LNKG_ID"),
+        
+        # DATA_SRC_PRNT_ID - Pass through
+        col("DATA_SRC_PRNT_ID"),
+        
+        # DATA_SRC_CHLD_ID - Pass through
+        col("DATA_SRC_CHLD_ID"),
+        
+        # DATA_SRC_SIBLNG_ID - Pass through
+        col("DATA_SRC_SIBLNG_ID"),
+        
+        # DATA_SRC_PRED_ID - Pass through
+        col("DATA_SRC_PRED_ID"),
+        
+        # DATA_SRC_SUCC_ID - Pass through
+        col("DATA_SRC_SUCC_ID"),
+        
+        # DATA_SRC_DPNDNT_ID - Pass through
+        col("DATA_SRC_DPNDNT_ID"),
+        
+        # DATA_SRC_DPNDR_ID - Pass through
+        col("DATA_SRC_DPNDR_ID"),
+        
+        # DATA_SRC_RLTD_ID - Pass through
+        col("DATA_SRC_RLTD_ID"),
+        
+        # DATA_SRC_ASSCTD_ID - Pass through
+        col("DATA_SRC_ASSCTD_ID"),
+        
+        # DATA_SRC_CNNCTD_ID - Pass through
+        col("DATA_SRC_CNNCTD_ID"),
+        
+        # DATA_SRC_LNKD_ID - Pass through
+        col("DATA_SRC_LNKD_ID"),
+        
+        # DATA_SRC_RFRD_ID - Pass through
+        col("DATA_SRC_RFRD_ID"),
+        
+        # DATA_SRC_MNTN_IND - Pass through
+        col("DATA_SRC_MNTN_IND"),
+        
+        # DATA_SRC_ARCHV_IND - Pass through
+        col("DATA_SRC_ARCHV_IND"),
+        
+        # DATA_SRC_DEL_IND - Pass through
+        col("DATA_SRC_DEL_IND"),
+        
+        # DATA_SRC_OBSLT_IND - Pass through
+        col("DATA_SRC_OBSLT_IND"),
+        
+        # DATA_SRC_DPRCTD_IND - Pass through
+        col("DATA_SRC_DPRCTD_IND"),
+        
+        # DATA_SRC_EXPRD_IND - Pass through
+        col("DATA_SRC_EXPRD_IND"),
+        
+        # DATA_SRC_SUSPND_IND - Pass through
+        col("DATA_SRC_SUSPND_IND"),
+        
+        # DATA_SRC_INACTV_IND - Pass through
+        col("DATA_SRC_INACTV_IND")
+    )
+    
+    transform_count = df_transformed.count()
+    logger.info(f"Transformed records: {transform_count}")
+    
+except Exception as e:
+    logger.error(f"Error in expression transformation: {str(e)}")
+    raise
+
+# ============================================
+# TRANSFORMATION: FIL_CIIM048D_855_DATA_SRC_VALIDATION
+# ============================================
+try:
+    logger.info("Applying filter transformation")
+    
+    # Filter condition: NOT ISNULL(CTRL_ID)
+    df_filtered = df_transformed.filter(
+        col("CTRL_ID").isNotNull()
+    )
+    
+    filter_count = df_filtered.count()
+    logger.info(f"Filtered records: {filter_count}")
+    logger.info(f"Records filtered out: {transform_count - filter_count}")
+    
+except Exception as e:
+    logger.error(f"Error in filter transformation: {str(e)}")
+    raise
+
+# ============================================
+# TARGET LOAD: CIIM048D_855_DATA_SRC_VALIDATION
+# ============================================
+try:
+    logger.info(f"Loading data to target table: {TARGET_SCHEMA}.{TARGET_TABLE}")
+    
+    # Write to target table in Fabric Lakehouse
+    df_filtered.write \
+        .format("delta") \
+        .mode("append") \
+        .option("mergeSchema", "true") \
+        .saveAsTable(f"{TARGET_LAKEHOUSE}.{TARGET_SCHEMA}.{TARGET_TABLE}")
+    
+    logger.info(f"Successfully loaded {filter_count} records to target table")
+    
+except Exception as e:
+    logger.error(f"Error loading data to target: {str(e)}")
+    raise
+
+# ============================================
+# EXECUTION SUMMARY
+# ============================================
+try:
+    summary = f"""
+    ============================================
+    EXECUTION SUMMARY
+    ============================================
+    Mapping Name: m_Ciim048d_855_Data_Src_Validation_Load
+    Execution Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    
+    Source Records Read: {source_count}
+    Records After Transformation: {transform_count}
+    Records After Filter: {filter_count}
+    Records Filtered Out: {transform_count - filter_count}
+    Records Loaded to Target: {filter_count}
+    
+    Status: SUCCESS
+    ============================================
+    """
+    
+    logger.info(summary)
+    print(summary)
+    
+except Exception as e:
+    logger.error(f"Error generating summary: {str(e)}")
+
+# ============================================
+# CLEANUP
+# ============================================
+try:
+    # Stop Spark session if needed
+    # spark.stop()
+    logger.info("Mapping execution completed successfully")
+except Exception as e:
+    logger.error(f"Error during cleanup: {str(e)}")
+
+# ============================================
+# END OF SCRIPT
+# ============================================
